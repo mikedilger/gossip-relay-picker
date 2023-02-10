@@ -1,0 +1,18 @@
+[package]
+name = "gossip-relay-picker"
+version = "0.1.0"
+description = "A relay picker for nostr, used by gossip"
+authors = ["Mike Dilger <mike@mikedilger.com>"]
+license = "MIT"
+repository = "https://github.com/mikedilger/gossip-relay-picker"
+homepage = "https://github.com/mikedilger/gossip-relay-picker"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dashmap = "5.4"
+nostr-types = { git = "https://github.com/mikedilger/nostr-types" }
+thiserror = "1.0"
+tracing = "0.1"
+tokio = { version = "1", features = ["full"] }
