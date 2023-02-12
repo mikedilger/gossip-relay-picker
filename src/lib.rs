@@ -1,5 +1,6 @@
 use dashmap::{DashMap, DashSet};
 use nostr_types::{PublicKeyHex, RelayUrl, Unixtime};
+use std::collections::hash_map::RandomState;
 use thiserror::Error;
 
 /// This is how a person uses a relay: to write (outbox) or to read (inbox)
@@ -65,30 +66,30 @@ pub trait RelayPickerHooks: Send + Sync {
 #[derive(Debug, Default)]
 pub struct RelayPicker<H: RelayPickerHooks + Default> {
     /// All of the relays we might use
-    pub all_relays: DashSet<RelayUrl>,
+    all_relays: DashSet<RelayUrl>,
 
     /// Hooks you provide to the Relay Picker
-    pub hooks: H,
+    hooks: H,
 
     /// A ranking of relays per person.
-    pub person_relay_scores: DashMap<PublicKeyHex, Vec<(RelayUrl, u64)>>,
+    person_relay_scores: DashMap<PublicKeyHex, Vec<(RelayUrl, u64)>>,
 
     /// All of the relays actually connected
-    pub connected_relays: DashSet<RelayUrl>,
+    connected_relays: DashSet<RelayUrl>,
 
     /// All of the relays currently connected, with optional assignments.
     /// (Sometimes a relay is connected for a different kind of subscription.)
-    pub relay_assignments: DashMap<RelayUrl, RelayAssignment>,
+    relay_assignments: DashMap<RelayUrl, RelayAssignment>,
 
     /// Relays which recently failed and which require a timeout before
     /// they can be chosen again.  The value is the time when it can be removed
     /// from this list.
-    pub excluded_relays: DashMap<RelayUrl, i64>,
+    excluded_relays: DashMap<RelayUrl, i64>,
 
     /// For each followed pubkey that still needs assignments, the number of relay
     /// assignments it is seeking.  These start out at settings.num_relays_per_person
     /// (if the person doesn't have that many relays, it will do the best it can)
-    pub pubkey_counts: DashMap<PublicKeyHex, usize>,
+    pubkey_counts: DashMap<PublicKeyHex, usize>,
 
 }
 
@@ -328,5 +329,28 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         }
 
         Ok(winning_url)
+    }
+
+    /// Iterate over all connected relays
+    /// run .key() on the output elements of this iterator to get the RelayUrl.
+    pub fn connected_relays_iter<'a>(&'a self) -> dashmap::iter_set::Iter<'a, RelayUrl, RandomState, DashMap<RelayUrl, ()>> {
+        self.connected_relays.iter()
+    }
+
+    /// Get the relay assignment for a given RelayUrl
+    pub fn get_relay_assignment(&self, relay_url: &RelayUrl) -> Option<RelayAssignment> {
+        self.relay_assignments.get(relay_url)
+            .map(|elem| elem.value().to_owned())
+    }
+
+    /// Iterate over all relay assignments
+    pub fn relay_assignments_iter<'a>(&'a self) -> dashmap::iter::Iter<'a, RelayUrl, RelayAssignment> {
+        self.relay_assignments.iter()
+    }
+
+    /// Get an iterator over all relays that are excluded, and the Unixtime when they
+    /// will be candidates again
+    pub fn excluded_relays_iter<'a>(&'a self) -> dashmap::iter::Iter<'a, RelayUrl, i64> {
+        self.excluded_relays.iter()
     }
 }
