@@ -116,6 +116,17 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
     /// Add a public key
     pub fn add_someone(&self, pubkey: PublicKeyHex) -> Result<(), Error> {
+        // Check if we already have them
+        if self.pubkey_counts.get(&pubkey).is_some() {
+            return Ok(());
+        }
+        for elem in self.relay_assignments.iter() {
+            let assignment = elem.value();
+            if assignment.pubkeys.contains(&pubkey) {
+                return Ok(());
+            }
+        }
+
         self.pubkey_counts.insert(pubkey, self.hooks.get_num_relays_per_person());
         Ok(())
     }
@@ -260,47 +271,39 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         // above when assigning scores, but in a way which would require a lot of
         // storage to keep, so we just do it again)
         let covered_public_keys = {
-            let mut pubkeys: Vec<PublicKeyHex> = Vec::new();
+            let pubkeys_seeking_relays: Vec<PublicKeyHex> = self
+                .pubkey_counts
+                .iter()
+                .filter(|e| *e.value() > 0)
+                .map(|e| e.key().to_owned())
+                .collect();
 
-            for elem in self.person_relay_scores.iter() {
-                let pubkeyhex = elem.key();
-                let relay_scores = elem.value();
+            let mut covered_pubkeys: Vec<PublicKeyHex> = Vec::new();
 
-                // Skip if this pubkey doesn't need any more assignments
-                if let Some(pkc) = self.pubkey_counts.get(pubkeyhex) {
-                    if *pkc == 0 {
-                        // person doesn't need anymore
-                        continue;
-                    }
-                } else {
-                    continue; // person doesn't need any
-                }
-
+            for pubkey in pubkeys_seeking_relays.iter() {
                 // Skip if relay is already assigned this pubkey
                 if let Some(assignment) = self.relay_assignments.get(&winning_url) {
-                    if assignment.pubkeys.contains(pubkeyhex) {
+                    if assignment.pubkeys.contains(pubkey) {
                         continue;
                     }
                 }
 
-                for (relay, _) in relay_scores.iter() {
-                    if *relay == winning_url {
-                        // Add to pubkeys
-                        pubkeys.push(pubkeyhex.to_owned());
+                if let Some(elem) = self.person_relay_scores.get(pubkey) {
+                    let relay_scores = elem.value();
 
-                        // Decrement in pubkey counts
-                        if let Some(mut count) = self.pubkey_counts.get_mut(pubkeyhex) {
+                    if relay_scores.iter().any(|e| e.0 == winning_url) {
+                        covered_pubkeys.push(pubkey.to_owned());
+
+                        if let Some(mut count) = self.pubkey_counts.get_mut(pubkey) {
                             if *count > 0 {
                                 *count -= 1;
                             }
                         }
-
-                        break;
                     }
                 }
             }
 
-            pubkeys
+            covered_pubkeys
         };
 
         if covered_public_keys.is_empty() {
