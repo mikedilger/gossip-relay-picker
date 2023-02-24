@@ -13,6 +13,10 @@ pub enum Direction {
 /// Errors the RelayPicker functions can return
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// No relays to pick from
+    #[error("No relays to pick from")]
+    NoRelays,
+
     /// No people left to assign. A good result.
     #[error("All people accounted for.")]
     NoPeopleLeft,
@@ -25,7 +29,6 @@ pub enum Error {
     #[error("Error: {0}")]
     General(String),
 }
-
 
 /// A RelayAssignment is a record of a relay which is serving (or will serve) the general
 /// feed for a set of public keys.
@@ -53,7 +56,11 @@ impl RelayAssignment {
 /// These are functions that need to be provided to the Relay Picker
 pub trait RelayPickerHooks: Send + Sync {
     fn get_all_relays(&self) -> Vec<RelayUrl>;
-    fn get_relays_for_pubkey(&self, pubkey: PublicKeyHex, direction: Direction) -> Vec<(RelayUrl, u64)>;
+    fn get_relays_for_pubkey(
+        &self,
+        pubkey: PublicKeyHex,
+        direction: Direction,
+    ) -> Vec<(RelayUrl, u64)>;
     fn get_max_relays(&self) -> usize;
     fn get_num_relays_per_person(&self) -> usize;
     fn get_followed_pubkeys(&self) -> Vec<PublicKeyHex>;
@@ -90,24 +97,20 @@ pub struct RelayPicker<H: RelayPickerHooks + Default> {
     /// assignments it is seeking.  These start out at settings.num_relays_per_person
     /// (if the person doesn't have that many relays, it will do the best it can)
     pubkey_counts: DashMap<PublicKeyHex, usize>,
-
 }
 
 impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     /// Create a new Relay Picker
     pub async fn new(hooks: H) -> Result<RelayPicker<H>, Error> {
-
         let all_relays: DashSet<RelayUrl> = DashSet::new();
-        for relay_url in hooks.get_all_relays()
-            .drain(..)
-        {
+        for relay_url in hooks.get_all_relays().drain(..) {
             all_relays.insert(relay_url);
         }
 
         let rp = RelayPicker {
             all_relays,
             hooks,
-            .. Default::default()
+            ..Default::default()
         };
 
         rp.refresh_person_relay_scores_inner(true).await?;
@@ -128,7 +131,8 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
             }
         }
 
-        self.pubkey_counts.insert(pubkey, self.hooks.get_num_relays_per_person());
+        self.pubkey_counts
+            .insert(pubkey, self.hooks.get_num_relays_per_person());
         Ok(())
     }
 
@@ -136,11 +140,14 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
     /// Refresh the person relay scores from the hook function
     pub async fn refresh_person_relay_scores(&self) -> Result<(), Error> {
-        Ok(self.refresh_person_relay_scores_inner(false).await?)
+        self.refresh_person_relay_scores_inner(false).await
     }
 
     // Refresh person relay scores.
-    async fn refresh_person_relay_scores_inner(&self, initialize_counts: bool) -> Result<(), Error> {
+    async fn refresh_person_relay_scores_inner(
+        &self,
+        initialize_counts: bool,
+    ) -> Result<(), Error> {
         self.person_relay_scores.clear();
 
         if initialize_counts {
@@ -157,8 +164,9 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
         // Compute scores for each person_relay pairing
         for pubkey in &pubkeys {
-            let best_relays: Vec<(RelayUrl, u64)> =
-                self.hooks.get_relays_for_pubkey(pubkey.to_owned(), Direction::Write);
+            let best_relays: Vec<(RelayUrl, u64)> = self
+                .hooks
+                .get_relays_for_pubkey(pubkey.to_owned(), Direction::Write);
             self.person_relay_scores.insert(pubkey.clone(), best_relays);
 
             if initialize_counts {
@@ -203,6 +211,10 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
         if self.pubkey_counts.is_empty() {
             return Err(Error::NoPeopleLeft);
+        }
+
+        if self.all_relays.is_empty() {
+            return Err(Error::NoRelays);
         }
 
         // Keep score for each relay
@@ -333,24 +345,27 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
     /// Iterate over all connected relays
     /// run .key() on the output elements of this iterator to get the RelayUrl.
-    pub fn connected_relays_iter<'a>(&'a self) -> dashmap::iter_set::Iter<'a, RelayUrl, RandomState, DashMap<RelayUrl, ()>> {
+    pub fn connected_relays_iter(
+        &self,
+    ) -> dashmap::iter_set::Iter<'_, RelayUrl, RandomState, DashMap<RelayUrl, ()>> {
         self.connected_relays.iter()
     }
 
     /// Get the relay assignment for a given RelayUrl
     pub fn get_relay_assignment(&self, relay_url: &RelayUrl) -> Option<RelayAssignment> {
-        self.relay_assignments.get(relay_url)
+        self.relay_assignments
+            .get(relay_url)
             .map(|elem| elem.value().to_owned())
     }
 
     /// Iterate over all relay assignments
-    pub fn relay_assignments_iter<'a>(&'a self) -> dashmap::iter::Iter<'a, RelayUrl, RelayAssignment> {
+    pub fn relay_assignments_iter(&self) -> dashmap::iter::Iter<'_, RelayUrl, RelayAssignment> {
         self.relay_assignments.iter()
     }
 
     /// Get an iterator over all relays that are excluded, and the Unixtime when they
     /// will be candidates again
-    pub fn excluded_relays_iter<'a>(&'a self) -> dashmap::iter::Iter<'a, RelayUrl, i64> {
+    pub fn excluded_relays_iter(&self) -> dashmap::iter::Iter<'_, RelayUrl, i64> {
         self.excluded_relays.iter()
     }
 }
