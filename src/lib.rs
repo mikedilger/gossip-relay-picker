@@ -1,8 +1,19 @@
+//! The main type here is `RelayPicker`. You will need to implement `RelayPickerHooks`
+//! and then create a `RelayPicker::new(hooks)` with those hooks.
+//!
+//! If you instantiate `RelayPicker` via `Default::default()`, for example in a lazy_static type
+//! setup, and then make changes which cause the Hooks to return something different than they
+//! did when they were created with `Default::default()` (e.g. global variable changes), then you
+//! might need to run `RelayPicker::init()` to reinitialize it with actual data.
+//!
+//!
+//!
+//!
+
 use async_trait::async_trait;
 use dashmap::DashMap;
 pub use nostr_types::{PublicKeyHex, RelayUrl, Unixtime};
 use thiserror::Error;
-
 
 /// This is how a person uses a relay: to write (outbox) or to read (inbox)
 #[derive(Debug, Copy, Clone)]
@@ -64,6 +75,9 @@ pub trait RelayPickerHooks: Send + Sync {
 
     /// Returns the best relays that this public key uses in the given Direction,
     /// in order of score from highest to lowest, along with the score.
+    ///
+    /// This is async and returns `Result<Vec<(RelayUrl, u64)>, Self::Error>`
+    /// Documentation may show the raw type
     async fn get_relays_for_pubkey(
         &self,
         pubkey: PublicKeyHex,
@@ -158,6 +172,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         Ok(())
     }
 
+    /// Remove a public key
     pub fn remove_someone(&self, pubkey: PublicKeyHex) {
         // Remove from pubkey counts
         self.pubkey_counts.remove(&pubkey);
@@ -214,7 +229,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     }
 
     /// When a relay disconnects, call this so that whatever assignments it might have
-    /// had can be reassigned.  Then call pick_relays() again.
+    /// had can be reassigned.  Then call `pick_relays()` again.
     pub fn relay_disconnected(&self, url: &RelayUrl) {
         // Remove from connected relays list
         if let Some((_key, assignment)) = self.relay_assignments.remove(url) {
@@ -233,8 +248,10 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         }
     }
 
-    /// Create the next assignment, and return the RelayUrl that has it.
-    /// The caller is responsible for making that assignment actually happen.
+    /// Create the next assignment, and return the `RelayUrl` that has it.
+    /// You should probably immediately call `get_relay_assignment()` with that `RelayUrl`
+    /// to get the newly created assignment. The caller is responsible for making that
+    /// assignment actually happen.
     pub async fn pick(&self) -> Result<RelayUrl, Error> {
         // If we are at max relays, only consider relays we are already
         // connected to
@@ -382,25 +399,26 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         Ok(winning_url)
     }
 
-    /// Get the relay assignment for a given RelayUrl
+    /// Get the `RelayAssignment` for a given `RelayUrl`
     pub fn get_relay_assignment(&self, relay_url: &RelayUrl) -> Option<RelayAssignment> {
         self.relay_assignments
             .get(relay_url)
             .map(|elem| elem.value().to_owned())
     }
 
-    /// Iterate over all relay assignments
+    /// Iterate over all `RelayAssignment`s
     pub fn relay_assignments_iter(&self) -> dashmap::iter::Iter<'_, RelayUrl, RelayAssignment> {
         self.relay_assignments.iter()
     }
 
-    /// Get an iterator over all relays that are excluded, and the Unixtime when they
+    /// Get an iterator over all `RelayUrl`s that are excluded, and the `Unixtime` when they
     /// will be candidates again
     pub fn excluded_relays_iter(&self) -> dashmap::iter::Iter<'_, RelayUrl, i64> {
         self.excluded_relays.iter()
     }
 
-    /// Get an iterator over all the public key counts (number of relays they still need)
+    /// Get an iterator over all the `PublicKeyHex`s that are not fully assigned, as well as
+    /// the number of relays they still need.
     pub fn pubkey_counts_iter(&self) -> dashmap::iter::Iter<'_, PublicKeyHex, usize> {
         self.pubkey_counts.iter()
     }
