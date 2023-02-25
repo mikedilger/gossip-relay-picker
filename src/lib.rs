@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use nostr_types::{PublicKeyHex, RelayUrl, Unixtime};
 use thiserror::Error;
 
@@ -92,9 +92,6 @@ pub trait RelayPickerHooks: Send + Sync {
 /// good assignments dynamically.
 #[derive(Debug, Default)]
 pub struct RelayPicker<H: RelayPickerHooks + Default> {
-    /// All of the relays we might use
-    all_relays: DashSet<RelayUrl>,
-
     /// Hooks you provide to the Relay Picker
     hooks: H,
 
@@ -119,13 +116,7 @@ pub struct RelayPicker<H: RelayPickerHooks + Default> {
 impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     /// Create a new Relay Picker
     pub async fn new(hooks: H) -> Result<RelayPicker<H>, Error> {
-        let all_relays: DashSet<RelayUrl> = DashSet::new();
-        for relay_url in hooks.get_all_relays().drain(..) {
-            all_relays.insert(relay_url);
-        }
-
         let rp = RelayPicker {
-            all_relays,
             hooks,
             ..Default::default()
         };
@@ -133,6 +124,19 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         rp.refresh_person_relay_scores_inner(true).await?;
 
         Ok(rp)
+    }
+
+    /// Re-initialize an existing Relay Picker
+    /// This is useful if you created the RelayPicker from Default (e.g. in lazy static)
+    pub async fn init(&self) -> Result<(), Error> {
+        self.relay_assignments.clear();
+        self.excluded_relays.clear();
+        self.pubkey_counts.clear();
+        self.person_relay_scores.clear();
+
+        self.refresh_person_relay_scores_inner(true).await?;
+
+        Ok(())
     }
 
     /// Add a public key
@@ -243,16 +247,15 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
             return Err(Error::NoPeopleLeft);
         }
 
-        if self.all_relays.is_empty() {
+        let all_relays = self.hooks.get_all_relays();
+
+        if all_relays.is_empty() {
             return Err(Error::NoRelays);
         }
 
         // Keep score for each relay
-        let scoreboard: DashMap<RelayUrl, u64> = self
-            .all_relays
-            .iter()
-            .map(|x| (x.key().to_owned(), 0))
-            .collect();
+        let scoreboard: DashMap<RelayUrl, u64> =
+            all_relays.iter().map(|x| (x.to_owned(), 0)).collect();
 
         // Assign scores to relays from each pubkey
         for elem in self.person_relay_scores.iter() {
@@ -301,10 +304,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         for mut score_entry in scoreboard.iter_mut() {
             let url = score_entry.key().to_owned();
             let score = score_entry.value_mut();
-            if let Some(elem) = self.all_relays.get(&url) {
-                let relay = elem.key();
-                *score = self.hooks.adjust_score(relay.to_owned(), *score);
-            }
+            *score = self.hooks.adjust_score(url, *score);
         }
 
         let winner = scoreboard
