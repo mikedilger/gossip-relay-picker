@@ -1,6 +1,5 @@
 use dashmap::{DashMap, DashSet};
 use nostr_types::{PublicKeyHex, RelayUrl, Unixtime};
-use std::collections::hash_map::RandomState;
 use thiserror::Error;
 
 /// This is how a person uses a relay: to write (outbox) or to read (inbox)
@@ -55,15 +54,33 @@ impl RelayAssignment {
 
 /// These are functions that need to be provided to the Relay Picker
 pub trait RelayPickerHooks: Send + Sync {
+    type Error: std::fmt::Display;
+
+    /// Returns all relays available to be connected to
     fn get_all_relays(&self) -> Vec<RelayUrl>;
+
+    /// Returns all relays that this public key uses in the given Direction
     fn get_relays_for_pubkey(
         &self,
         pubkey: PublicKeyHex,
         direction: Direction,
-    ) -> Vec<(RelayUrl, u64)>;
+    ) -> Result<Vec<(RelayUrl, u64)>, Self::Error>;
+
+    /// Is the relay currently connected?
+    fn is_relay_connected(&self, relay: &RelayUrl) -> bool;
+
+    /// Returns the maximum number of relays that should be connected to at one time
     fn get_max_relays(&self) -> usize;
+
+    /// Returns the number of relays each followed person's events should be pulled from
+    /// Many people use 2 or 3 for redundancy.
     fn get_num_relays_per_person(&self) -> usize;
+
+    /// Returns the public keys of all the people followed
     fn get_followed_pubkeys(&self) -> Vec<PublicKeyHex>;
+
+    /// Adjusts the score for a given relay, perhaps based on relay-specific metrics
+    fn adjust_score(&self, relay: RelayUrl, score: u64) -> u64;
 }
 
 /// The RelayPicker is a structure that helps assign people we follow to relays we watch.
@@ -80,9 +97,6 @@ pub struct RelayPicker<H: RelayPickerHooks + Default> {
 
     /// A ranking of relays per person.
     person_relay_scores: DashMap<PublicKeyHex, Vec<(RelayUrl, u64)>>,
-
-    /// All of the relays actually connected
-    connected_relays: DashSet<RelayUrl>,
 
     /// All of the relays currently connected, with optional assignments.
     /// (Sometimes a relay is connected for a different kind of subscription.)
@@ -136,7 +150,18 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         Ok(())
     }
 
-    // We could do 'remove_someone' but that's less important. People can just restart.
+    pub fn remove_someone(&self, pubkey: PublicKeyHex) {
+        // Remove from pubkey counts
+        self.pubkey_counts.remove(&pubkey);
+
+        // Remove from relay assignments
+        for mut elem in self.relay_assignments.iter_mut() {
+            let assignment = elem.value_mut();
+            if let Some(pos) = assignment.pubkeys.iter().position(|x| x == &pubkey) {
+                assignment.pubkeys.remove(pos);
+            }
+        }
+    }
 
     /// Refresh the person relay scores from the hook function
     pub async fn refresh_person_relay_scores(&self) -> Result<(), Error> {
@@ -166,7 +191,8 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         for pubkey in &pubkeys {
             let best_relays: Vec<(RelayUrl, u64)> = self
                 .hooks
-                .get_relays_for_pubkey(pubkey.to_owned(), Direction::Write);
+                .get_relays_for_pubkey(pubkey.to_owned(), Direction::Write)
+                .map_err(|e| Error::General(format!("{e}")))?;
             self.person_relay_scores.insert(pubkey.clone(), best_relays);
 
             if initialize_counts {
@@ -247,7 +273,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
                 }
 
                 // If at max, skip relays not already connected
-                if at_max_relays && !self.connected_relays.contains(relay) {
+                if at_max_relays && !self.hooks.is_relay_connected(relay) {
                     continue;
                 }
 
@@ -268,6 +294,14 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         // Adjust all scores based on relay rank and relay success rate
         // (gossip code elided due to complex data tracking required)
         // TBD to add this kind of feature back.
+        for mut score_entry in scoreboard.iter_mut() {
+            let url = score_entry.key().to_owned();
+            let score = score_entry.value_mut();
+            if let Some(elem) = self.all_relays.get(&url) {
+                let relay = elem.key();
+                *score = self.hooks.adjust_score(relay.to_owned(), *score);
+            }
+        }
 
         let winner = scoreboard
             .iter()
@@ -343,14 +377,6 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         Ok(winning_url)
     }
 
-    /// Iterate over all connected relays
-    /// run .key() on the output elements of this iterator to get the RelayUrl.
-    pub fn connected_relays_iter(
-        &self,
-    ) -> dashmap::iter_set::Iter<'_, RelayUrl, RandomState, DashMap<RelayUrl, ()>> {
-        self.connected_relays.iter()
-    }
-
     /// Get the relay assignment for a given RelayUrl
     pub fn get_relay_assignment(&self, relay_url: &RelayUrl) -> Option<RelayAssignment> {
         self.relay_assignments
@@ -367,5 +393,10 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     /// will be candidates again
     pub fn excluded_relays_iter(&self) -> dashmap::iter::Iter<'_, RelayUrl, i64> {
         self.excluded_relays.iter()
+    }
+
+    /// Get an iterator over all the public key counts (number of relays they still need)
+    pub fn pubkey_counts_iter(&self) -> dashmap::iter::Iter<'_, PublicKeyHex, usize> {
+        self.pubkey_counts.iter()
     }
 }
