@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use dashmap::DashMap;
-use nostr_types::{PublicKeyHex, RelayUrl, Unixtime};
+pub use nostr_types::{PublicKeyHex, RelayUrl, Unixtime};
 use thiserror::Error;
+
 
 /// This is how a person uses a relay: to write (outbox) or to read (inbox)
 #[derive(Debug, Copy, Clone)]
