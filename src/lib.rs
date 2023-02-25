@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
 use nostr_types::{PublicKeyHex, RelayUrl, Unixtime};
 use thiserror::Error;
@@ -53,14 +54,16 @@ impl RelayAssignment {
 }
 
 /// These are functions that need to be provided to the Relay Picker
+#[async_trait]
 pub trait RelayPickerHooks: Send + Sync {
     type Error: std::fmt::Display;
 
     /// Returns all relays available to be connected to
     fn get_all_relays(&self) -> Vec<RelayUrl>;
 
-    /// Returns all relays that this public key uses in the given Direction
-    fn get_relays_for_pubkey(
+    /// Returns the best relays that this public key uses in the given Direction,
+    /// in order of score from highest to lowest, along with the score.
+    async fn get_relays_for_pubkey(
         &self,
         pubkey: PublicKeyHex,
         direction: Direction,
@@ -192,6 +195,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
             let best_relays: Vec<(RelayUrl, u64)> = self
                 .hooks
                 .get_relays_for_pubkey(pubkey.to_owned(), Direction::Write)
+                .await
                 .map_err(|e| Error::General(format!("{e}")))?;
             self.person_relay_scores.insert(pubkey.clone(), best_relays);
 
