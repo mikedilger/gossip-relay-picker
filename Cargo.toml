@@ -6,6 +6,7 @@ authors = ["Mike Dilger <mike@mikedilger.com>"]
 license = "MIT"
 repository = "https://github.com/mikedilger/gossip-relay-picker"
 homepage = "https://github.com/mikedilger/gossip-relay-picker"
+readme = "README.md"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
