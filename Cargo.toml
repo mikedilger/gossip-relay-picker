@@ -1,6 +1,6 @@
 [package]
 name = "gossip-relay-picker"
-version = "0.1.0"
+version = "0.2.0-unstable"
 description = "A relay picker for nostr, used by gossip"
 authors = ["Mike Dilger <mike@mikedilger.com>"]
 license = "MIT"
