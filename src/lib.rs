@@ -231,15 +231,18 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     /// When a relay disconnects, call this so that whatever assignments it might have
     /// had can be reassigned.  Then call `pick_relays()` again.
     pub fn relay_disconnected(&self, url: &RelayUrl, penalty_seconds: i64) {
-        // Exclude the relay for a period
-        let hence = Unixtime::now().unwrap().0 + penalty_seconds;
-        self.excluded_relays.insert(url.to_owned(), hence);
-        tracing::info!(
-            "{} goes into the penalty box for {} seconds until {}",
-            url,
-            penalty_seconds,
-            hence
-        );
+
+        if penalty_seconds > 0 {
+            // Exclude the relay for a period
+            let hence = Unixtime::now().unwrap().0 + penalty_seconds;
+            self.excluded_relays.insert(url.to_owned(), hence);
+            tracing::info!(
+                "{} goes into the penalty box for {} seconds until {}",
+                url,
+                penalty_seconds,
+                hence
+            );
+        }
 
         // Remove from connected relays list
         if let Some((_key, assignment)) = self.relay_assignments.remove(url) {
