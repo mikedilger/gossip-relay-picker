@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-pub use nostr_types::{PublicKeyHex, RelayUrl, Unixtime};
+pub use nostr_types::{PublicKey, RelayUrl, Unixtime};
 use thiserror::Error;
 
 /// This is how a person uses a relay: to write (outbox) or to read (inbox)
@@ -50,7 +50,7 @@ pub struct RelayAssignment {
     pub relay_url: RelayUrl,
 
     /// The public keys assigned to the relay
-    pub pubkeys: Vec<PublicKeyHex>,
+    pub pubkeys: Vec<PublicKey>,
 }
 
 impl RelayAssignment {
@@ -80,7 +80,7 @@ pub trait RelayPickerHooks: Send + Sync {
     /// Documentation may show the raw type
     async fn get_relays_for_pubkey(
         &self,
-        pubkey: PublicKeyHex,
+        pubkey: PublicKey,
         direction: Direction,
     ) -> Result<Vec<(RelayUrl, u64)>, Self::Error>;
 
@@ -95,7 +95,7 @@ pub trait RelayPickerHooks: Send + Sync {
     fn get_num_relays_per_person(&self) -> usize;
 
     /// Returns the public keys of all the people followed
-    fn get_followed_pubkeys(&self) -> Vec<PublicKeyHex>;
+    fn get_followed_pubkeys(&self) -> Vec<PublicKey>;
 
     /// Adjusts the score for a given relay, perhaps based on relay-specific metrics
     fn adjust_score(&self, relay: RelayUrl, score: u64) -> u64;
@@ -111,7 +111,7 @@ pub struct RelayPicker<H: RelayPickerHooks + Default> {
     hooks: H,
 
     /// A ranking of relays per person.
-    person_relay_scores: DashMap<PublicKeyHex, Vec<(RelayUrl, u64)>>,
+    person_relay_scores: DashMap<PublicKey, Vec<(RelayUrl, u64)>>,
 
     /// All of the relays currently connected, with optional assignments.
     /// (Sometimes a relay is connected for a different kind of subscription.)
@@ -125,7 +125,7 @@ pub struct RelayPicker<H: RelayPickerHooks + Default> {
     /// For each followed pubkey that still needs assignments, the number of relay
     /// assignments it is seeking.  These start out at settings.num_relays_per_person
     /// (if the person doesn't have that many relays, it will do the best it can)
-    pubkey_counts: DashMap<PublicKeyHex, usize>,
+    pubkey_counts: DashMap<PublicKey, usize>,
 }
 
 impl<H: RelayPickerHooks + Default> RelayPicker<H> {
@@ -155,7 +155,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     }
 
     /// Add a public key
-    pub fn add_someone(&self, pubkey: PublicKeyHex) -> Result<(), Error> {
+    pub fn add_someone(&self, pubkey: PublicKey) -> Result<(), Error> {
         // Check if we already have them
         if self.pubkey_counts.get(&pubkey).is_some() {
             return Ok(());
@@ -173,7 +173,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     }
 
     /// Remove a public key
-    pub fn remove_someone(&self, pubkey: PublicKeyHex) {
+    pub fn remove_someone(&self, pubkey: PublicKey) {
         // Remove from pubkey counts
         self.pubkey_counts.remove(&pubkey);
 
@@ -203,7 +203,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         }
 
         // Get all the people we follow
-        let pubkeys: Vec<PublicKeyHex> = self
+        let pubkeys: Vec<PublicKey> = self
             .hooks
             .get_followed_pubkeys()
             .iter()
@@ -348,14 +348,14 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         // above when assigning scores, but in a way which would require a lot of
         // storage to keep, so we just do it again)
         let covered_public_keys = {
-            let pubkeys_seeking_relays: Vec<PublicKeyHex> = self
+            let pubkeys_seeking_relays: Vec<PublicKey> = self
                 .pubkey_counts
                 .iter()
                 .filter(|e| *e.value() > 0)
                 .map(|e| e.key().to_owned())
                 .collect();
 
-            let mut covered_pubkeys: Vec<PublicKeyHex> = Vec::new();
+            let mut covered_pubkeys: Vec<PublicKey> = Vec::new();
 
             for pubkey in pubkeys_seeking_relays.iter() {
                 // Skip if relay is already assigned this pubkey
@@ -425,9 +425,9 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         self.excluded_relays.iter()
     }
 
-    /// Get an iterator over all the `PublicKeyHex`s that are not fully assigned, as well as
+    /// Get an iterator over all the `PublicKey`s that are not fully assigned, as well as
     /// the number of relays they still need.
-    pub fn pubkey_counts_iter(&self) -> dashmap::iter::Iter<'_, PublicKeyHex, usize> {
+    pub fn pubkey_counts_iter(&self) -> dashmap::iter::Iter<'_, PublicKey, usize> {
         self.pubkey_counts.iter()
     }
 }
