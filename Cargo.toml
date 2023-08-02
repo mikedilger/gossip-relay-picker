@@ -14,7 +14,7 @@ edition = "2021"
 [dependencies]
 async-trait = "0.1"
 dashmap = "5.4"
-nostr-types = { git = "https://github.com/mikedilger/nostr-types", rev = "ec6bb019bef28b332cd57f8d72477bf29c87934d" }
+nostr-types = { git = "https://github.com/mikedilger/nostr-types", rev = "099077afc81def588b8655f010a15d77baaff7ca" }
 thiserror = "1.0"
 tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
