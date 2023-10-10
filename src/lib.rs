@@ -113,17 +113,16 @@ pub struct RelayPicker<H: RelayPickerHooks + Default> {
     /// A ranking of relays per person.
     person_relay_scores: DashMap<PublicKey, Vec<(RelayUrl, u64)>>,
 
-    /// All of the relays currently connected, with optional assignments.
-    /// (Sometimes a relay is connected for a different kind of subscription.)
+    /// All of the relays currently connected, with their assignment.
     relay_assignments: DashMap<RelayUrl, RelayAssignment>,
 
     /// Relays which recently failed and which require a timeout before
-    /// they can be chosen again.  The value is the time when it can be removed
+    /// they can be chosen again. The value is the time when it can be removed
     /// from this list.
     excluded_relays: DashMap<RelayUrl, i64>,
 
     /// For each followed pubkey that still needs assignments, the number of relay
-    /// assignments it is seeking.  These start out at settings.num_relays_per_person
+    /// assignments it is seeking.  These start out at get_num_relays_per_person()
     /// (if the person doesn't have that many relays, it will do the best it can)
     pubkey_counts: DashMap<PublicKey, usize>,
 }
@@ -156,19 +155,22 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
     /// Add a public key
     pub fn add_someone(&self, pubkey: PublicKey) -> Result<(), Error> {
-        // Check if we already have them
         if self.pubkey_counts.get(&pubkey).is_some() {
+            // We already know they need relays
             return Ok(());
         }
         for elem in self.relay_assignments.iter() {
             let assignment = elem.value();
             if assignment.pubkeys.contains(&pubkey) {
+                // We already assigned them to some relays
                 return Ok(());
             }
         }
 
+        // Add that the need relays
         self.pubkey_counts
             .insert(pubkey, self.hooks.get_num_relays_per_person());
+
         Ok(())
     }
 
@@ -279,7 +281,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
             return Err(Error::NoRelays);
         }
 
-        // Keep score for each relay
+        // Keep score for each relay, start at 0
         let scoreboard: DashMap<RelayUrl, u64> =
             all_relays.iter().map(|x| (x.to_owned(), 0)).collect();
 
