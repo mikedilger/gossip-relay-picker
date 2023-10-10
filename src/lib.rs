@@ -5,10 +5,6 @@
 //! setup, and then make changes which cause the Hooks to return something different than they
 //! did when they were created with `Default::default()` (e.g. global variable changes), then you
 //! might need to run `RelayPicker::init()` to reinitialize it with actual data.
-//!
-//!
-//!
-//!
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -183,9 +179,46 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         for mut elem in self.relay_assignments.iter_mut() {
             let assignment = elem.value_mut();
             if let Some(pos) = assignment.pubkeys.iter().position(|x| x == &pubkey) {
-                assignment.pubkeys.remove(pos);
+                assignment.pubkeys.swap_remove(pos);
+                // relay assignment may have zero pubkeys at this point, but
+                // garbage collect will figure that out.
             }
         }
+    }
+
+    /// Garbage Collect
+    /// This removes pubkeys that are no longer in get_followed_pubkeys(), and returns
+    /// the relays whose assignments have become empty
+    pub async fn garbage_collect(&self) -> Result<Vec<RelayUrl>, Error> {
+        let mut idle: Vec<RelayUrl> = Vec::new();
+
+        let mut followed: Vec<PublicKey> = self.hooks.get_followed_pubkeys();
+
+        // Sort so we can use binary search
+        followed.sort();
+
+        for mut elem in self.relay_assignments.iter_mut() {
+            let assignment = elem.value_mut();
+
+            // Remove all pubkeys we no longer follow
+            let mut index = 0;
+            while let Some(key) = assignment.pubkeys.get(index) {
+                if followed.binary_search(key).is_err() {
+                    // that key is not followed.
+                    assignment.pubkeys.swap_remove(index);
+                    // don't bump index, it is now the next one slid back.
+                } else {
+                    index += 1;
+                }
+            }
+
+            // If assignment is now empty, save as an idle relay
+            if assignment.pubkeys.is_empty() {
+                idle.push(assignment.relay_url.clone());
+            }
+        }
+
+        Ok(idle)
     }
 
     /// Refresh the person relay scores from the hook function
@@ -205,12 +238,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         }
 
         // Get all the people we follow
-        let pubkeys: Vec<PublicKey> = self
-            .hooks
-            .get_followed_pubkeys()
-            .iter()
-            .map(|p| p.to_owned())
-            .collect();
+        let pubkeys: Vec<PublicKey> = self.hooks.get_followed_pubkeys();
 
         // Compute scores for each person_relay pairing
         for pubkey in &pubkeys {
@@ -219,11 +247,11 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
                 .get_relays_for_pubkey(pubkey.to_owned(), Direction::Write)
                 .await
                 .map_err(|e| Error::General(format!("{e}")))?;
-            self.person_relay_scores.insert(pubkey.clone(), best_relays);
+            self.person_relay_scores.insert(*pubkey, best_relays);
 
             if initialize_counts {
                 self.pubkey_counts
-                    .insert(pubkey.clone(), self.hooks.get_num_relays_per_person());
+                    .insert(*pubkey, self.hooks.get_num_relays_per_person());
             }
         }
 
@@ -233,7 +261,6 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     /// When a relay disconnects, call this so that whatever assignments it might have
     /// had can be reassigned.  Then call `pick_relays()` again.
     pub fn relay_disconnected(&self, url: &RelayUrl, penalty_seconds: i64) {
-
         if penalty_seconds > 0 {
             // Exclude the relay for a period
             let hence = Unixtime::now().unwrap().0 + penalty_seconds;
