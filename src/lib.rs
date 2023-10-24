@@ -397,12 +397,22 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
                 if let Some(elem) = self.person_relay_scores.get(pubkey) {
                     let relay_scores = elem.value();
 
-                    if relay_scores.iter().any(|e| e.0 == winning_url) {
-                        covered_pubkeys.push(pubkey.to_owned());
+                    for (i, (relay, score)) in relay_scores.iter().enumerate() {
+                        if *relay == winning_url {
+                            // Do not assign to this relay if it's not one of their top
+                            // three relays and its score has dropped to 5 or lower.
+                            if *score <= 5 && i >= 3 {
+                                // in this case we can skip the rest which have lower
+                                // scores and are further down the list
+                                break;
+                            }
 
-                        if let Some(mut count) = self.pubkey_counts.get_mut(pubkey) {
-                            if *count > 0 {
-                                *count -= 1;
+                            covered_pubkeys.push(pubkey.to_owned());
+
+                            if let Some(mut count) = self.pubkey_counts.get_mut(pubkey) {
+                                if *count > 0 {
+                                    *count -= 1;
+                                }
                             }
                         }
                     }
