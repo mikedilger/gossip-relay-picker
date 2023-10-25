@@ -453,6 +453,14 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
             .map(|elem| elem.value().to_owned())
     }
 
+    /// Get just the count of people assigned to a given `RelayUrl`
+    pub fn get_relay_following_count(&self, relay_url: &RelayUrl) -> usize {
+        self.relay_assignments
+            .get(relay_url)
+            .map(|assignment| assignment.pubkeys.len())
+            .unwrap_or(0)
+    }
+
     /// Iterate over all `RelayAssignment`s
     pub fn relay_assignments_iter(&self) -> dashmap::iter::Iter<'_, RelayUrl, RelayAssignment> {
         self.relay_assignments.iter()
