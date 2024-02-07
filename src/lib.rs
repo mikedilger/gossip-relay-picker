@@ -265,7 +265,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
             // Exclude the relay for a period
             let hence = Unixtime::now().unwrap().0 + penalty_seconds;
             self.excluded_relays.insert(url.to_owned(), hence);
-            tracing::info!(
+            tracing::debug!(
                 "{} goes into the penalty box for {} seconds until {}",
                 url,
                 penalty_seconds,
