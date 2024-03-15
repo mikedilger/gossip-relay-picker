@@ -8,15 +8,8 @@
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-pub use nostr_types::{PublicKey, RelayUrl, Unixtime};
+pub use nostr_types::{PublicKey, RelayUrl, RelayUsage, Unixtime};
 use thiserror::Error;
-
-/// This is how a person uses a relay: to write (outbox) or to read (inbox)
-#[derive(Debug, Copy, Clone)]
-pub enum Direction {
-    Read,
-    Write,
-}
 
 /// Errors the RelayPicker functions can return
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -69,7 +62,7 @@ pub trait RelayPickerHooks: Send + Sync {
     /// Returns all relays available to be connected to
     fn get_all_relays(&self) -> Vec<RelayUrl>;
 
-    /// Returns the best relays that this public key uses in the given Direction,
+    /// Returns the best relays that this public key uses in the given RelayUsage,
     /// in order of score from highest to lowest, along with the score.
     ///
     /// This is async and returns `Result<Vec<(RelayUrl, u64)>, Self::Error>`
@@ -77,7 +70,7 @@ pub trait RelayPickerHooks: Send + Sync {
     async fn get_relays_for_pubkey(
         &self,
         pubkey: PublicKey,
-        direction: Direction,
+        usage: RelayUsage,
     ) -> Result<Vec<(RelayUrl, u64)>, Self::Error>;
 
     /// Is the relay currently connected?
@@ -244,7 +237,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         for pubkey in &pubkeys {
             let best_relays: Vec<(RelayUrl, u64)> = self
                 .hooks
-                .get_relays_for_pubkey(pubkey.to_owned(), Direction::Write)
+                .get_relays_for_pubkey(pubkey.to_owned(), RelayUsage::Outbox)
                 .await
                 .map_err(|e| Error::General(format!("{e}")))?;
             self.person_relay_scores.insert(*pubkey, best_relays);
