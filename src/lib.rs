@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use dashmap::DashMap;
-pub use nostr_types::{PublicKey, RelayUrl, RelayUsage, Unixtime};
+pub use nostr_types::{PublicKey, RelayOrigin, RelayUsage, Unixtime};
 use thiserror::Error;
 
 /// Errors the RelayPicker functions can return
@@ -35,8 +35,8 @@ pub enum Error {
 /// feed for a set of public keys.
 #[derive(Debug, Clone)]
 pub struct RelayAssignment {
-    /// The URL of the relay
-    pub relay_url: RelayUrl,
+    /// The origin of the relay
+    pub relay_origin: RelayOrigin,
 
     /// The public keys assigned to the relay
     pub pubkeys: Vec<PublicKey>,
@@ -44,7 +44,7 @@ pub struct RelayAssignment {
 
 impl RelayAssignment {
     pub fn merge_in(&mut self, other: RelayAssignment) -> Result<(), Error> {
-        if self.relay_url != other.relay_url {
+        if self.relay_origin != other.relay_origin {
             return Err(Error::General(
                 "Attempted to merge relay assignments on different relays".to_owned(),
             ));
@@ -60,21 +60,21 @@ pub trait RelayPickerHooks: Send + Sync {
     type Error: std::fmt::Display;
 
     /// Returns all relays available to be connected to
-    fn get_all_relays(&self) -> Vec<RelayUrl>;
+    fn get_all_relays(&self) -> Vec<RelayOrigin>;
 
     /// Returns the best relays that this public key uses in the given RelayUsage,
     /// in order of score from highest to lowest, along with the score.
     ///
-    /// This is async and returns `Result<Vec<(RelayUrl, u64)>, Self::Error>`
+    /// This is async and returns `Result<Vec<(RelayOrigin, u64)>, Self::Error>`
     /// Documentation may show the raw type
     async fn get_relays_for_pubkey(
         &self,
         pubkey: PublicKey,
         usage: RelayUsage,
-    ) -> Result<Vec<(RelayUrl, u64)>, Self::Error>;
+    ) -> Result<Vec<(RelayOrigin, u64)>, Self::Error>;
 
     /// Is the relay currently connected?
-    fn is_relay_connected(&self, relay: &RelayUrl) -> bool;
+    fn is_relay_connected(&self, relay: &RelayOrigin) -> bool;
 
     /// Returns the maximum number of relays that should be connected to at one time
     fn get_max_relays(&self) -> usize;
@@ -87,7 +87,7 @@ pub trait RelayPickerHooks: Send + Sync {
     fn get_followed_pubkeys(&self) -> Vec<PublicKey>;
 
     /// Adjusts the score for a given relay, perhaps based on relay-specific metrics
-    fn adjust_score(&self, relay: RelayUrl, score: u64) -> u64;
+    fn adjust_score(&self, relay: RelayOrigin, score: u64) -> u64;
 }
 
 /// The RelayPicker is a structure that helps assign people we follow to relays we watch.
@@ -100,15 +100,15 @@ pub struct RelayPicker<H: RelayPickerHooks + Default> {
     hooks: H,
 
     /// A ranking of relays per person.
-    person_relay_scores: DashMap<PublicKey, Vec<(RelayUrl, u64)>>,
+    person_relay_scores: DashMap<PublicKey, Vec<(RelayOrigin, u64)>>,
 
     /// All of the relays currently connected, with their assignment.
-    relay_assignments: DashMap<RelayUrl, RelayAssignment>,
+    relay_assignments: DashMap<RelayOrigin, RelayAssignment>,
 
     /// Relays which recently failed and which require a timeout before
     /// they can be chosen again. The value is the time when it can be removed
     /// from this list.
-    excluded_relays: DashMap<RelayUrl, i64>,
+    excluded_relays: DashMap<RelayOrigin, i64>,
 
     /// For each followed pubkey that still needs assignments, the number of relay
     /// assignments it is seeking.  These start out at get_num_relays_per_person()
@@ -182,8 +182,8 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     /// Garbage Collect
     /// This removes pubkeys that are no longer in get_followed_pubkeys(), and returns
     /// the relays whose assignments have become empty
-    pub async fn garbage_collect(&self) -> Result<Vec<RelayUrl>, Error> {
-        let mut idle: Vec<RelayUrl> = Vec::new();
+    pub async fn garbage_collect(&self) -> Result<Vec<RelayOrigin>, Error> {
+        let mut idle: Vec<RelayOrigin> = Vec::new();
 
         let mut followed: Vec<PublicKey> = self.hooks.get_followed_pubkeys();
 
@@ -207,7 +207,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
             // If assignment is now empty, save as an idle relay
             if assignment.pubkeys.is_empty() {
-                idle.push(assignment.relay_url.clone());
+                idle.push(assignment.relay_origin.clone());
             }
         }
 
@@ -235,7 +235,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
         // Compute scores for each person_relay pairing
         for pubkey in &pubkeys {
-            let best_relays: Vec<(RelayUrl, u64)> = self
+            let best_relays: Vec<(RelayOrigin, u64)> = self
                 .hooks
                 .get_relays_for_pubkey(pubkey.to_owned(), RelayUsage::Outbox)
                 .await
@@ -253,21 +253,21 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
     /// When a relay disconnects, call this so that whatever assignments it might have
     /// had can be reassigned.  Then call `pick_relays()` again.
-    pub fn relay_disconnected(&self, url: &RelayUrl, penalty_seconds: i64) {
+    pub fn relay_disconnected(&self, origin: &RelayOrigin, penalty_seconds: i64) {
         if penalty_seconds > 0 {
             // Exclude the relay for a period
             let hence = Unixtime::now().unwrap().0 + penalty_seconds;
-            self.excluded_relays.insert(url.to_owned(), hence);
+            self.excluded_relays.insert(origin.to_owned(), hence);
             tracing::debug!(
                 "{} goes into the penalty box for {} seconds until {}",
-                url,
+                origin,
                 penalty_seconds,
                 hence
             );
         }
 
         // Remove from connected relays list
-        if let Some((_key, assignment)) = self.relay_assignments.remove(url) {
+        if let Some((_key, assignment)) = self.relay_assignments.remove(origin) {
             // Put the public keys back into pubkey_counts
             for pubkey in assignment.pubkeys.iter() {
                 self.pubkey_counts
@@ -278,11 +278,11 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         }
     }
 
-    /// Create the next assignment, and return the `RelayUrl` that has it.
-    /// You should probably immediately call `get_relay_assignment()` with that `RelayUrl`
+    /// Create the next assignment, and return the `RelayOrigin` that has it.
+    /// You should probably immediately call `get_relay_assignment()` with that `RelayOrigin`
     /// to get the newly created assignment. The caller is responsible for making that
     /// assignment actually happen.
-    pub async fn pick(&self) -> Result<RelayUrl, Error> {
+    pub async fn pick(&self) -> Result<RelayOrigin, Error> {
         // If we are at max relays, only consider relays we are already
         // connected to
         let at_max_relays = self.relay_assignments.len() >= self.hooks.get_max_relays();
@@ -302,7 +302,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         }
 
         // Keep score for each relay, start at 0
-        let scoreboard: DashMap<RelayUrl, u64> =
+        let scoreboard: DashMap<RelayOrigin, u64> =
             all_relays.iter().map(|x| (x.to_owned(), 0)).collect();
 
         // Assign scores to relays from each pubkey
@@ -350,16 +350,16 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         // (gossip code elided due to complex data tracking required)
         // TBD to add this kind of feature back.
         for mut score_entry in scoreboard.iter_mut() {
-            let url = score_entry.key().to_owned();
+            let origin = score_entry.key().to_owned();
             let score = score_entry.value_mut();
-            *score = self.hooks.adjust_score(url, *score);
+            *score = self.hooks.adjust_score(origin, *score);
         }
 
         let winner = scoreboard
             .iter()
             .max_by(|x, y| x.value().cmp(y.value()))
             .unwrap();
-        let winning_url: RelayUrl = winner.key().to_owned();
+        let winning_origin: RelayOrigin = winner.key().to_owned();
         let winning_score: u64 = *winner.value();
 
         if winning_score == 0 {
@@ -381,7 +381,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
 
             for pubkey in pubkeys_seeking_relays.iter() {
                 // Skip if relay is already assigned this pubkey
-                if let Some(assignment) = self.relay_assignments.get(&winning_url) {
+                if let Some(assignment) = self.relay_assignments.get(&winning_origin) {
                     if assignment.pubkeys.contains(pubkey) {
                         continue;
                     }
@@ -391,7 +391,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
                     let relay_scores = elem.value();
 
                     for (i, (relay, score)) in relay_scores.iter().enumerate() {
-                        if *relay == winning_url {
+                        if *relay == winning_origin {
                             // Do not assign to this relay if it's not one of their top
                             // three relays and its score has dropped to 5 or lower.
                             if *score <= 5 && i >= 3 {
@@ -423,45 +423,45 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         self.pubkey_counts.retain(|_, count| *count > 0);
 
         let assignment = RelayAssignment {
-            relay_url: winning_url.clone(),
+            relay_origin: winning_origin.clone(),
             pubkeys: covered_public_keys,
         };
 
         // Put assignment into relay_assignments
-        if let Some(mut maybe_elem) = self.relay_assignments.get_mut(&winning_url) {
+        if let Some(mut maybe_elem) = self.relay_assignments.get_mut(&winning_origin) {
             // FIXME this could cause a panic, but it would mean we have bad code.
             maybe_elem.value_mut().merge_in(assignment).unwrap();
         } else {
             self.relay_assignments
-                .insert(winning_url.clone(), assignment);
+                .insert(winning_origin.clone(), assignment);
         }
 
-        Ok(winning_url)
+        Ok(winning_origin)
     }
 
-    /// Get the `RelayAssignment` for a given `RelayUrl`
-    pub fn get_relay_assignment(&self, relay_url: &RelayUrl) -> Option<RelayAssignment> {
+    /// Get the `RelayAssignment` for a given `RelayOrigin`
+    pub fn get_relay_assignment(&self, relay_origin: &RelayOrigin) -> Option<RelayAssignment> {
         self.relay_assignments
-            .get(relay_url)
+            .get(relay_origin)
             .map(|elem| elem.value().to_owned())
     }
 
-    /// Get just the count of people assigned to a given `RelayUrl`
-    pub fn get_relay_following_count(&self, relay_url: &RelayUrl) -> usize {
+    /// Get just the count of people assigned to a given `RelayOrigin`
+    pub fn get_relay_following_count(&self, relay_origin: &RelayOrigin) -> usize {
         self.relay_assignments
-            .get(relay_url)
+            .get(relay_origin)
             .map(|assignment| assignment.pubkeys.len())
             .unwrap_or(0)
     }
 
     /// Iterate over all `RelayAssignment`s
-    pub fn relay_assignments_iter(&self) -> dashmap::iter::Iter<'_, RelayUrl, RelayAssignment> {
+    pub fn relay_assignments_iter(&self) -> dashmap::iter::Iter<'_, RelayOrigin, RelayAssignment> {
         self.relay_assignments.iter()
     }
 
-    /// Get an iterator over all `RelayUrl`s that are excluded, and the `Unixtime` when they
+    /// Get an iterator over all `RelayOrigin`s that are excluded, and the `Unixtime` when they
     /// will be candidates again
-    pub fn excluded_relays_iter(&self) -> dashmap::iter::Iter<'_, RelayUrl, i64> {
+    pub fn excluded_relays_iter(&self) -> dashmap::iter::Iter<'_, RelayOrigin, i64> {
         self.excluded_relays.iter()
     }
 
