@@ -256,7 +256,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
     pub fn relay_disconnected(&self, url: &RelayUrl, penalty_seconds: i64) {
         if penalty_seconds > 0 {
             // Exclude the relay for a period
-            let hence = Unixtime::now().unwrap().0 + penalty_seconds;
+            let hence = Unixtime::now().0 + penalty_seconds;
             self.excluded_relays.insert(url.to_owned(), hence);
             tracing::debug!(
                 "{} goes into the penalty box for {} seconds until {}",
@@ -288,7 +288,7 @@ impl<H: RelayPickerHooks + Default> RelayPicker<H> {
         let at_max_relays = self.relay_assignments.len() >= self.hooks.get_max_relays();
 
         // Maybe include excluded relays
-        let now = Unixtime::now().unwrap().0;
+        let now = Unixtime::now().0;
         self.excluded_relays.retain(|_, v| *v > now);
 
         if self.pubkey_counts.is_empty() {
